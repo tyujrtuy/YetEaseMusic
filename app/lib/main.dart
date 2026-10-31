@@ -148,7 +148,7 @@ class YetEaseApp extends StatelessWidget {
           ...WidgetsApp.defaultActions,
           _ToggleIntent: CallbackAction<_ToggleIntent>(onInvoke: (_) => pb.toggle()),
           _NextIntent: CallbackAction<_NextIntent>(onInvoke: (_) => pb.next()),
-          _PrevIntent: CallbackAction<_PrevIntent>(onInvoke: (_) => pb.prev()),
+          _PrevIntent: CallbackAction<_PrevIntent>(onInvoke: (_) => pb.previous()),
           _VolUpIntent: CallbackAction<_VolUpIntent>(onInvoke: (_) => app.setVolume((app.volume.value + 0.05).clamp(0.0, 1.0))),
           _VolDownIntent: CallbackAction<_VolDownIntent>(onInvoke: (_) => app.setVolume((app.volume.value - 0.05).clamp(0.0, 1.0))),
         },
