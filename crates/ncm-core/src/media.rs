@@ -153,7 +153,7 @@ fn run(
             Update::Volume(v) => set_volume(&mut controls, v),
         };
         if let Err(e) = r {
-            tracing::debug!("media controls update failed: {e:?}");
+            tracing::warn!("media controls update failed: {e:?}");
         }
     }
 }

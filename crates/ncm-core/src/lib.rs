@@ -446,11 +446,39 @@ impl Core {
             return Ok(());
         }
         let quality = self.settings.lock().unwrap().quality;
-        let url = self
-            .api
-            .song_url(song.id, quality)
-            .await
-            .map_err(|e| e.to_string())?;
+        let song_id = song.id;
+        let pic_url = song.album.pic_url.clone();
+        let cover_dir = self.paths.cache_dir.join("covers");
+
+        // 并行拉取音频播放地址与封面图片（如果封面尚未在 covers/ 中就绪）
+        let fetch_url = self.api.song_url(song.id, quality);
+        let fetch_cover = async {
+            #[cfg(not(target_os = "android"))]
+            if let Some(u) = pic_url {
+                if u.starts_with("http://") || u.starts_with("https://") {
+                    let cover_file = cover_dir.join(format!("{song_id}.jpg"));
+                    if !cover_file.exists() {
+                        let target_url = format!("{}?param=512y512", u.replace("http://", "https://"));
+                        match self.image(&target_url).await {
+                            Ok(bytes) => {
+                                let _ = tokio::fs::create_dir_all(&cover_dir).await;
+                                let _ = tokio::fs::write(&cover_file, &bytes).await;
+                                tracing::info!(id = song_id, path = %cover_file.display(), "cover downloaded for SMTC");
+                                return true;
+                            }
+                            Err(e) => {
+                                tracing::warn!(id = song_id, err = ?e, "failed to download cover for SMTC");
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        };
+
+        let (url_res, downloaded_cover) = tokio::join!(fetch_url, fetch_cover);
+        let url = url_res.map_err(|e| e.to_string())?;
+
         let Some(link) = url.url.filter(|u| !u.is_empty()) else {
             return Err(if song.fee == 1 {
                 "需要会员".into()
@@ -477,25 +505,12 @@ impl Core {
         );
         // 每次开始新歌顺带检查一次缓存容量（扫描目录很便宜）
         self.prune_caches();
-        
-                        // 异步下载当前歌曲封面，保存为标准 covers/{song_id}.jpg 供 Windows SMTC / Fluent Flyouts 读取
-                #[cfg(not(target_os = "android"))]
-                if let Some(u) = song.album.pic_url.as_ref() {
-                    if !u.starts_with('/') && !u.contains(":\\") && !u.contains(":/") {
-                        let cover_dir = self.paths.cache_dir.join("covers");
-                        let cover_file = cover_dir.join(format!("{}.jpg", song.id));
-                        if !cover_file.exists() {
-                            let target_url = format!("{}?param=512y512", u.replace("http://", "https://"));
-                            if let Ok(bytes) = self.image(&target_url).await {
-                                let _ = tokio::fs::create_dir_all(&cover_dir).await;
-                                let _ = tokio::fs::write(&cover_file, &bytes).await;
-                                if self.current_song().as_ref().map(|s| s.id) == Some(song.id) {
-                                    self.media_metadata(song);
-                                }
-                            }
-                        }
-                    }
-                }
+
+        // 封面就绪后立即同步刷新 SMTC / Fluent Flyouts
+        if downloaded_cover && self.current_song().as_ref().map(|s| s.id) == Some(song.id) {
+            self.media_metadata(song);
+        }
+
         Ok(())
     }
 
@@ -769,15 +784,27 @@ impl Core {
     }
 
     fn resolve_cover_url(&self, song: &Song) -> Option<String> {
-        // 1. 如果是本地音乐文件（带盘符 C:\ 或以 / 开头）
-        if let Some(ref u) = song.album.pic_url {
-            if u.contains(":\\") || u.contains(":/") {
-                let clean = u.replace('/', "\\");
-                let clean = clean.trim_start_matches('\\');
-                return Some(format!("file://{clean}"));
-            }
-            if u.starts_with('/') {
-                return Some(format!("file://{u}"));
+        let u = song.album.pic_url.as_deref()?;
+        let is_remote = u.starts_with("http://") || u.starts_with("https://");
+
+        // 1. 本地音频文件封面（必须是已存在于磁盘的本地文件绝对路径）
+        if !is_remote {
+            let path = std::path::Path::new(u);
+            if path.exists() {
+                #[cfg(windows)]
+                {
+                    let s = u.replace('/', "\\");
+                    let clean = if s.len() >= 3 && (s.starts_with('\\') || s.starts_with('/')) && s.as_bytes()[2] == b':' {
+                        &s[1..]
+                    } else {
+                        &s
+                    };
+                    return Some(format!("file://{clean}"));
+                }
+                #[cfg(not(windows))]
+                {
+                    return Some(format!("file://{u}"));
+                }
             }
         }
 
@@ -785,28 +812,53 @@ impl Core {
         let cover_dir = self.paths.cache_dir.join("covers");
         let cover_file = cover_dir.join(format!("{}.jpg", song.id));
         if cover_file.exists() {
-            let p = cover_file.to_string_lossy().replace('/', "\\");
-            return Some(format!("file://{p}"));
+            #[cfg(windows)]
+            {
+                let s = cover_file.to_string_lossy().replace('/', "\\");
+                let clean = if s.len() >= 3 && (s.starts_with('\\') || s.starts_with('/')) && s.as_bytes()[2] == b':' {
+                    &s[1..]
+                } else {
+                    &s
+                };
+                return Some(format!("file://{clean}"));
+            }
+            #[cfg(not(windows))]
+            {
+                return Some(format!("file://{}", cover_file.to_string_lossy()));
+            }
         }
 
         // 3. 检查常规图片缓存并复制一份带 .jpg 后缀的专属封面
-        if let Some(ref u) = song.album.pic_url {
+        if is_remote {
             let url_with_param = format!("{}?param=512y512", u.replace("http://", "https://"));
             let cache_file = images::path_for(&self.image_cache_dir(), &url_with_param);
             if cache_file.exists() {
                 let _ = std::fs::create_dir_all(&cover_dir);
-                let _ = std::fs::copy(&cache_file, &cover_file);
-                let p = cover_file.to_string_lossy().replace('/', "\\");
-                return Some(format!("file://{p}"));
+                if std::fs::copy(&cache_file, &cover_file).is_ok() {
+                    #[cfg(windows)]
+                    {
+                        let s = cover_file.to_string_lossy().replace('/', "\\");
+                        let clean = if s.len() >= 3 && (s.starts_with('\\') || s.starts_with('/')) && s.as_bytes()[2] == b':' {
+                            &s[1..]
+                        } else {
+                            &s
+                        };
+                        return Some(format!("file://{clean}"));
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        return Some(format!("file://{}", cover_file.to_string_lossy()));
+                    }
+                }
             }
         }
 
-        // Windows SMTC 对直接传递外部 HTTP/HTTPS URL 经常报 0x800700A1 错误并中断更新
-        // 因此在本地缓存未就绪前返回 None，待异步下载完成后再次刷新
+        // Windows SMTC 对直接传递外部 HTTP/HTTPS URL 经常报 0x80070057 / 0x800700A1 错误并中断更新
+        // 在本地缓存就绪前返回 None，待异步下载完成后再次刷新
         #[cfg(windows)]
         return None;
         #[cfg(not(windows))]
-        song.album.pic_url.as_ref().map(|u| format!("{}?param=512y512", u.replace("http://", "https://")))
+        Some(format!("{}?param=512y512", u.replace("http://", "https://")))
     }
 
     fn media_metadata(&self, _song: &Song) {
@@ -814,6 +866,7 @@ impl Core {
         if let Some(m) = self.media.lock().unwrap().as_ref() {
             let s = _song;
             let cover_url = self.resolve_cover_url(s);
+            tracing::info!(id = s.id, cover = ?cover_url, "updating media metadata");
             m.update(media::Update::Metadata {
                 title: s.name.clone(),
                 artist: s.artist_names(),
