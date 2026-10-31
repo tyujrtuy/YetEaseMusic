@@ -10,6 +10,7 @@ pub mod queue;
 #[cfg(not(target_os = "android"))]
 pub mod tray;
 pub mod update;
+pub mod hotkey;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
@@ -240,6 +241,7 @@ impl Core {
         }
         core.save_settings();
         core.save_session();
+        hotkey::start_hotkeys(&core);
 
         // 播放器事件桥：转发给订阅者，并在曲目结束时自动切歌
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -475,7 +477,26 @@ impl Core {
         );
         // 每次开始新歌顺带检查一次缓存容量（扫描目录很便宜）
         self.prune_caches();
-        Ok(())
+        
+                // 异步下载当前歌曲封面，并保证本地带 .jpg 扩展名，下载好后刷新 SMTC 元数据（让 Fluent Flyouts 完美显示）
+                #[cfg(not(target_os = "android"))]
+                if let Some(u) = song.album.pic_url.as_ref() {
+                    if !u.starts_with('/') && !u.contains(":\\") && !u.contains(":/") {
+                        let target_url = format!("{}?param=512y512", u.replace("http://", "https://"));
+                        if let Ok(bytes) = self.image(&target_url).await {
+                            let cache_file = images::path_for(&self.image_cache_dir(), &target_url);
+                            let ext_file = cache_file.with_extension("jpg");
+                            if !ext_file.exists() {
+                                let _ = tokio::fs::write(&ext_file, &bytes).await;
+                            }
+                            if self.current_song().as_ref().map(|s| s.id) == Some(song.id) {
+                                self.media_metadata(song);
+                            }
+                        }
+                    }
+                }
+        
+                Ok(())
     }
 
     /// 本地文件或已下载文件的路径
@@ -747,17 +768,36 @@ impl Core {
         true
     }
 
+    fn resolve_cover_url(&self, song: &Song) -> Option<String> {
+        let u = song.album.pic_url.as_ref()?;
+        // 本地文件路径
+        if u.starts_with('/') || u.contains(":\\") || u.contains(":/") {
+            let p = u.replace('\\', "/");
+            let p = p.trim_start_matches('/');
+            return Some(format!("file:///{p}"));
+        }
+        let url_with_param = format!("{}?param=512y512", u.replace("http://", "https://"));
+        let cache_file = images::path_for(&self.image_cache_dir(), &url_with_param);
+        let ext_file = cache_file.with_extension("jpg");
+        if ext_file.exists() {
+            let p = ext_file.to_string_lossy().replace('\\', "/");
+            let p = p.trim_start_matches('/');
+            return Some(format!("file:///{p}"));
+        }
+        if cache_file.exists() {
+            let _ = std::fs::copy(&cache_file, &ext_file);
+            let p = ext_file.to_string_lossy().replace('\\', "/");
+            let p = p.trim_start_matches('/');
+            return Some(format!("file:///{p}"));
+        }
+        Some(url_with_param)
+    }
+
     fn media_metadata(&self, _song: &Song) {
         #[cfg(not(target_os = "android"))]
         if let Some(m) = self.media.lock().unwrap().as_ref() {
             let s = _song;
-            let cover_url = s.album.pic_url.as_ref().map(|u| {
-                if u.starts_with('/') {
-                    format!("file://{u}")
-                } else {
-                    format!("{}?param=512y512", u.replace("http://", "https://"))
-                }
-            });
+            let cover_url = self.resolve_cover_url(s);
             m.update(media::Update::Metadata {
                 title: s.name.clone(),
                 artist: s.artist_names(),

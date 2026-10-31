@@ -36,7 +36,11 @@ ksni = "0.3.7"
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = "0.26.1"
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 webpki-roots = "1.0.11"

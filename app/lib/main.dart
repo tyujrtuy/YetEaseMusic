@@ -57,8 +57,11 @@ Future<void> main(List<String> args) async {
         titleBarStyle: TitleBarStyle.hidden,
       ),
       () async {
-        await windowManager.show();
-        await windowManager.focus();
+        final isSilent = args.contains('--silent') || args.contains('--minimized') || args.contains('--background');
+        if (!isSilent) {
+          await windowManager.show();
+          await windowManager.focus();
+        }
       },
     );
   }
@@ -135,10 +138,19 @@ class YetEaseApp extends StatelessWidget {
         shortcuts: {
           ...WidgetsApp.defaultShortcuts,
           const SingleActivator(LogicalKeyboardKey.space): const _ToggleIntent(),
+          const SingleActivator(LogicalKeyboardKey.keyZ, control: true): const _ToggleIntent(),
+          const SingleActivator(LogicalKeyboardKey.arrowRight, control: true): const _NextIntent(),
+          const SingleActivator(LogicalKeyboardKey.arrowLeft, control: true): const _PrevIntent(),
+          const SingleActivator(LogicalKeyboardKey.arrowUp, control: true): const _VolUpIntent(),
+          const SingleActivator(LogicalKeyboardKey.arrowDown, control: true): const _VolDownIntent(),
         },
         actions: {
           ...WidgetsApp.defaultActions,
           _ToggleIntent: CallbackAction<_ToggleIntent>(onInvoke: (_) => pb.toggle()),
+          _NextIntent: CallbackAction<_NextIntent>(onInvoke: (_) => pb.next()),
+          _PrevIntent: CallbackAction<_PrevIntent>(onInvoke: (_) => pb.prev()),
+          _VolUpIntent: CallbackAction<_VolUpIntent>(onInvoke: (_) => app.setVolume((app.volume.value + 0.05).clamp(0.0, 1.0))),
+          _VolDownIntent: CallbackAction<_VolDownIntent>(onInvoke: (_) => app.setVolume((app.volume.value - 0.05).clamp(0.0, 1.0))),
         },
         // 缩放包在 Navigator 外层，弹窗、抽屉、提示条也一起缩放
         builder: (context, child) {
@@ -159,7 +171,19 @@ class YetEaseApp extends StatelessWidget {
   }
 }
 
-/// 空格键播放/暂停（输入框聚焦时由输入框自己处理空格）
+/// 快捷键 Intent 定义
 class _ToggleIntent extends Intent {
   const _ToggleIntent();
+}
+class _NextIntent extends Intent {
+  const _NextIntent();
+}
+class _PrevIntent extends Intent {
+  const _PrevIntent();
+}
+class _VolUpIntent extends Intent {
+  const _VolUpIntent();
+}
+class _VolDownIntent extends Intent {
+  const _VolDownIntent();
 }
