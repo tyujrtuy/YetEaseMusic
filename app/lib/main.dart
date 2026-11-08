@@ -94,7 +94,8 @@ Future<void> main(List<String> args) async {
   runApp(const YetEaseApp());
   maybeRunTour();
   // 启动后稍等再检查更新，不和首屏加载抢网络。测试启动（--autoplay、截图巡览）时不检查
-  if (AppState.I.settings.value?.autoCheckUpdate ?? false) {
+  final isSilentMode = args.contains('--silent') || args.contains('--minimized') || args.contains('--background');
+  if (!isSilentMode && (AppState.I.settings.value?.autoCheckUpdate ?? false)) {
     if (autoplay == null && Platform.environment['YETEASE_TOUR'] == null) {
       Future.delayed(const Duration(seconds: 6), () => checkForUpdates(manual: false));
     }
