@@ -18,7 +18,7 @@ const EAPI_DOMAIN: &str = "https://interfacepc.music.163.com";
 
 const UA_WEAPI: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
 const UA_LINUXAPI: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.90 Safari/537.36";
-const UA_API_IPHONE: &str = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)";
+const UA_PC_DESKTOP: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 /// 这些业务码在 api-enhanced 里也按成功处理（主要是扫码登录的中间状态）。
 const OK_CODES: &[i64] = &[200, 201, 302, 400, 502, 800, 801, 802, 803];
@@ -150,7 +150,9 @@ impl Client {
     pub fn new(session: Session) -> Result<Self> {
         // reqwest 用 rustls-no-provider，这里装上 ring（交叉编译到安卓比 aws-lc 省事）
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20));
+        let builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .no_proxy();
         #[cfg(target_os = "android")]
         let builder = builder.tls_backend_preconfigured(android_tls());
         let http = builder.build()?;
@@ -243,7 +245,7 @@ impl Client {
                         format!("{EAPI_DOMAIN}/eapi/{}", &uri[5..]),
                         form,
                         cookie,
-                        UA_API_IPHONE,
+                        UA_PC_DESKTOP,
                         None,
                     )
                 }
@@ -265,7 +267,7 @@ impl Client {
                         format!("{API_DOMAIN}{uri}"),
                         form,
                         cookie,
-                        UA_API_IPHONE,
+                        UA_PC_DESKTOP,
                         None,
                     )
                 }
